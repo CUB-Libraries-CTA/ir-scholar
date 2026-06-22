@@ -19,9 +19,8 @@ Hyrax::EditPermissionsService.class_eval do
         ids = ActiveFedora::SolrService.query("{!field f=member_ids_ssim}#{form.object.model.id}",
                                               fl: ActiveFedora.id_field)
                                        .map { |x| x.fetch(ActiveFedora.id_field) }
-        Hyrax.logger.warn("Couldn't find a parent work for FileSet: #{form.object.model.id}.") if ids.empty?
-        Hyrax.logger.warn "IDs: #{ids}"
         af_work = ActiveFedora::Base.find(ids.first.to_s)
+
         new(object: af_work, ability: ability)
       end
     elsif form.object.file_set?
