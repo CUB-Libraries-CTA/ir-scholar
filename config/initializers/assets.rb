@@ -12,3 +12,12 @@ Rails.application.config.assets.paths << Rails.root.join('node_modules')
 # application.js, application.css, and all non-JS/CSS in the app/assets
 # folder are already added.
 # Rails.application.config.assets.precompile += %w( admin.js admin.css )
+
+# Add these files to the precompilation
+Rails.application.config.assets.precompile += %w[
+  cu_boulder_font.css
+  cu_boulder_branding.css
+  cu_boulder_branding.css.map
+  openseadragon.css
+  openseadragon/openseadragon.js.map
+]
