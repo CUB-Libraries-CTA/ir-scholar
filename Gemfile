@@ -118,3 +118,5 @@ gem "active-fedora", "~> 13.3"
 gem "sprockets", "= 3.7.2"
 
 gem "ffi", "= 1.17.2"
+
+gem "okcomputer", "~> 1.19"

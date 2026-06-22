@@ -75,6 +75,7 @@ fits.log
 .vscode/*
 .idea
 .ai
+.junie
 
 rules.log
 log/rules.log
