@@ -2,3 +2,5 @@
 :queues:
   - default
   - ingest
+  - import
+  - export

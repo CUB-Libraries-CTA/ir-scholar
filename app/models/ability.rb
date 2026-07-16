@@ -9,8 +9,6 @@ class Ability
     if admin?
       can [:destroy], ActiveFedora::Base
       can [:create, :show, :add_user, :remove_user, :index, :edit, :update, :destroy], Role
-      can :manage, Zizia::CsvImport
-      can :manage, Zizia::CsvImportDetail
     end
     if collection_manager?
       can :manage, ::Collection
@@ -28,5 +26,13 @@ class Ability
 
   def collection_manager?
     user_groups.any? { |x| ["collection_manager", "admin"].include?(x) }
+  end
+
+  def can_import_works?
+    admin?
+  end
+
+  def can_export_works?
+    admin?
   end
 end

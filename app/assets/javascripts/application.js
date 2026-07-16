@@ -22,7 +22,6 @@
 
 //= require tinymce
 
+//= require bulkrax/application
 //= require_tree .
 //= require hyrax
-
-//= require zizia/application.js

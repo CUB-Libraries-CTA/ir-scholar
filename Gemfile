@@ -107,8 +107,6 @@ gem "rest-client"
 
 gem "riiif", "~> 2.0"
 
-gem "zizia", git: "https://github.com/culibraries/zizia.git", ref: "etd-loader"
-
 gem "posix-spawn"
 gem "font-awesome-rails"
 gem "font-awesome-sass"
@@ -120,3 +118,5 @@ gem "sprockets", "= 3.7.2"
 gem "ffi", "= 1.17.2"
 
 gem "okcomputer", "~> 1.19"
+
+gem "bulkrax"

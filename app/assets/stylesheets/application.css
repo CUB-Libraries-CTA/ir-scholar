@@ -10,9 +10,9 @@
  * files in this directory. Styles in this file should be added after the last require_* statement.
  * It is generally better to create a new file per style scope.
  *
- *= require zizia/application
  *= require_tree .
  *= require dataTables/bootstrap/3/jquery.dataTables.bootstrap
+ *= require 'bulkrax/application'
  *= require_self
  */
 /** Global styles */
@@ -21,17 +21,18 @@
 
 /* Add the Core Trust Seal to CU Branded Footer */
 .site-footer .container-fluid {
-  background-image: url('https://cubl-static.s3-us-west-2.amazonaws.com/samvera/CoreTrustSeal-logo-transparent.png');
-  background-repeat: no-repeat;
-  background-size: 75px;
-  background-position: center;
+    background-image: url('https://cubl-static.s3-us-west-2.amazonaws.com/samvera/CoreTrustSeal-logo-transparent.png');
+    background-repeat: no-repeat;
+    background-size: 75px;
+    background-position: center;
 }
 
 /* Override the blur on the head image and make it crisp */
 .image-masthead .background-container {
-  -webkit-filter: blur(0);
-  filter: blur(0);
+    -webkit-filter: blur(0);
+    filter: blur(0);
 }
+
 .image-masthead .background-container-gradient {
-  background: linear-gradient(transparent, rgba(0,0,0,0.0), rgba(0,0,0,0.5))
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.0), rgba(0, 0, 0, 0.5))
 }

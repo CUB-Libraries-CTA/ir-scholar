@@ -63,12 +63,13 @@ RUN apk update && \
     apk --update --no-cache add build-base \
     bash \
     curl \
+    libxml2-dev \
+    nodejs \
     openjdk17 \
     unzip \
     yaml \
-    zlib-dev \
-    nodejs \
     yarn \
+    zlib-dev \
     $DATABASE_APK_PACKAGE \
     $EXTRA_APK_PACKAGES && \
     ln -sf /usr/bin/python3 /usr/bin/python && \
