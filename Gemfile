@@ -91,6 +91,7 @@ gem "bootstrap-sass", "~> 3.0"
 gem "twitter-typeahead-rails", "0.11.1.pre.corejavascript"
 gem "jquery-rails"
 gem "jquery-datatables-rails" # , github: 'rweng/jquery-datatables-rails'
+gem "jquery-fileupload-rails", "~> 1.0"
 gem "jquery-ui-rails"
 gem "devise"
 gem "devise-guests", "~> 0.6"
@@ -119,4 +120,4 @@ gem "ffi", "= 1.17.2"
 
 gem "okcomputer", "~> 1.19"
 
-gem "bulkrax"
+gem 'bulkrax', '~> 9.1.0'

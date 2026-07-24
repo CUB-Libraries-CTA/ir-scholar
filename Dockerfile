@@ -91,7 +91,7 @@ RUN gem update --system $RUBYGEMS_VERSION \
     && bundle config set --local without 'development test' \
     && bundle install --jobs "$(nproc)" \
     && rm -rf /data/tmp \
-    && mkdir /data/tmp
+    && mkdir /data/tmp && mkdir /data/tmp/imports && mkdir /data/tmp/exports
 
 # Copy package.json and yarn.lock for JS dependency caching
 COPY package.json yarn.lock /data/

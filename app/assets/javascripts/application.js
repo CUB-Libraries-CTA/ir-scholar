@@ -22,6 +22,10 @@
 
 //= require tinymce
 
-//= require bulkrax/application
-//= require_tree .
 //= require hyrax
+//= require bulkrax_turbolinks_compatibility
+//= stub bulkrax/entries
+//= require bulkrax/application
+//= require bulkrax_entries_compatibility
+//= require bulkrax_turbolinks_compatibility_restore
+//= require_tree .

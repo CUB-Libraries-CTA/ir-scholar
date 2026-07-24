@@ -48,6 +48,8 @@ Rails.application.routes.draw do
     end
   end
 
+  get '/assets/branding.css.map', to: proc { [204, { 'Content-Type' => 'application/json' }, ['']] }
+
   # For details on the DSL available within this file, see http://guides.rubyonrails.org/routing.html
   # mount BrowseEverything::Engine => '/browse'
   # Sidekiq Web App

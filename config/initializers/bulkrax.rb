@@ -5,6 +5,12 @@ Bulkrax.setup do |config|
   # config.parsers += [
   #   { name: 'MODS - My Local MODS parser', class_name: 'Bulkrax::ModsXmlParser', partial: 'mods_fields' },
   # ]
+  config.parsers -= [
+    { name: "OAI - Dublin Core", class_name: "Bulkrax::OaiDcParser", partial: "oai_fields" },
+    { name: "OAI - Qualified Dublin Core", class_name: "Bulkrax::OaiQualifiedDcParser", partial: "oai_fields" },
+    { name: "Bagit", class_name: "Bulkrax::BagitParser", partial: "bagit_fields" },
+    { name: "XML", class_name: "Bulkrax::XmlParser", partial: "xml_fields" }
+  ]
 
   # WorkType to use as the default if none is specified in the import
   # Default is the first returned by Hyrax.config.curation_concerns, stringified
@@ -16,10 +22,10 @@ Bulkrax.setup do |config|
   # config.object_factory = Bulkrax::ValkyrieObjectFactory
 
   # Path to store pending imports
-  # config.import_path = 'tmp/imports'
+  config.import_path = '/data/tmp/imports'
 
   # Path to store exports before download
-  # config.export_path = 'tmp/exports'
+  config.export_path = '/data/tmp/exports'
 
   # Server name for oai request header
   # config.server_name = 'my_server@name.com'
