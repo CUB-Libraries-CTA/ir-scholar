@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 ## CUBL Change:
+# This fixes the 'title' of nil errors for jobs in the sidekiq queue
 Hyrax::FileSetAttachedEventJob.class_eval do
   # Log the event to the fileset's and its container's streams
   def log_event(repo_object)

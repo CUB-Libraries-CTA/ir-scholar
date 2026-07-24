@@ -48,6 +48,7 @@ Rails.application.routes.draw do
     end
   end
 
+  # Fix the 'branding.css.map missing' error
   get '/assets/branding.css.map', to: proc { [204, { 'Content-Type' => 'application/json' }, ['']] }
 
   # For details on the DSL available within this file, see http://guides.rubyonrails.org/routing.html
