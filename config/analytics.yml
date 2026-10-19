@@ -3,7 +3,7 @@
 #
 analytics:
   ga4:
-    analytics_id: G-48DFH9QGB6
+    analytics_id: <%= ENV.fetch('ANALYTICS_ID', 'G-48DFH9QGB6') %>
 #  google:
 #    analytics_id: G-48DFH9QGB6
 #    app_name: cu-scholar
