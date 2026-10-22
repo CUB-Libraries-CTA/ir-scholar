@@ -3,18 +3,20 @@
 Bulkrax.setup do |config|
   # Add local parsers
   # config.parsers += [
-  #   { name: 'MODS - My Local MODS parser', class_name: 'Bulkrax::ModsXmlParser', partial: 'mods_fields' },
+  #   { name: 'Scholar', class_name: 'Bulkrax::ScholarParser', partial: 'csv_fields' }
   # ]
   config.parsers -= [
-    { name: "OAI - Dublin Core", class_name: "Bulkrax::OaiDcParser", partial: "oai_fields" },
-    { name: "OAI - Qualified Dublin Core", class_name: "Bulkrax::OaiQualifiedDcParser", partial: "oai_fields" },
-    { name: "Bagit", class_name: "Bulkrax::BagitParser", partial: "bagit_fields" },
-    { name: "XML", class_name: "Bulkrax::XmlParser", partial: "xml_fields" }
+    { name: 'OAI - Dublin Core', class_name: 'Bulkrax::OaiDcParser', partial: 'oai_fields' },
+    { name: 'OAI - Qualified Dublin Core', class_name: 'Bulkrax::OaiQualifiedDcParser', partial: 'oai_fields' },
+    { name: 'Bagit', class_name: 'Bulkrax::BagitParser', partial: 'bagit_fields' },
+    { name: 'XML', class_name: 'Bulkrax::XmlParser', partial: 'xml_fields' }
   ]
 
   # WorkType to use as the default if none is specified in the import
   # Default is the first returned by Hyrax.config.curation_concerns, stringified
-  # config.default_work_type = "MyWork"
+  # Set explicitly: ProQuest ETD rows (app/services/proquest_bulkrax_csv.rb) have
+  # no model column and rely on this.
+  config.default_work_type = 'GraduateThesisOrDissertation'
 
   # Factory Class to use when generating and saving objects
   config.object_factory = Bulkrax::ObjectFactory
@@ -22,10 +24,10 @@ Bulkrax.setup do |config|
   # config.object_factory = Bulkrax::ValkyrieObjectFactory
 
   # Path to store pending imports
-  config.import_path = '/data/tmp/imports'
+  config.import_path = '/data/tmp/csv_uploads'
 
   # Path to store exports before download
-  config.export_path = '/data/tmp/exports'
+  config.export_path = '/data/tmp/import_files:shared'
 
   # Server name for oai request header
   # config.server_name = 'my_server@name.com'
@@ -38,6 +40,32 @@ Bulkrax.setup do |config|
   # The default value for CSV is collection
   # Add/replace parsers, for example:
   # config.collection_field_mapping['Bulkrax::RdfEntry'] = 'http://opaquenamespace.org/ns/set'
+
+  # Columns written by etd-loader/etd_loader.rb. Only its columns named
+  # differently from the work property, or holding several values joined with
+  # '|~|', need a mapping; every other column already matches a property.
+  # - The property name comes first in `from` because CSV exports name each
+  #   column after the first `from` entry.
+  # - A mapping replaces Bulkrax's default one for that column, so `parsed: true`
+  #   keeps the default clean-up of resource_type (matched to the authority)
+  #   and subject (capitalised) for every CSV import.
+  # - file: the loader's 'files' column; its split pattern is Bulkrax's default
+  #   file separators ':', ';' and '|' plus the loader's '|~|'. Bulkrax checks
+  #   files up front only in the first `from` column, so a missing file in a
+  #   'files' column fails that entry rather than the whole import.
+  etd_loader_split = '\s*\|~\|\s*'
+  config.field_mappings['Bulkrax::CsvParser'] = {
+    'parents' => { from: ['parents'], related_parents_field_mapping: true, split: true, join: true },
+    'children' => { from: ['children'], related_children_field_mapping: true, split: true },
+    'resource_type' => { from: ['resource_type'], parsed: true },
+    'rights_statement' => { from: ['rights_statement'] },
+    'creator' => { from: ['creator'], split: etd_loader_split },
+    'keyword' => { from: ['keyword'], split: etd_loader_split },
+    'subject' => { from: ['subject'], split: etd_loader_split, parsed: true },
+    'contributor_advisor' => { from: ['contributor_advisor'], split: etd_loader_split },
+    'contributor_committeemember' => { from: ['contributor_committeemember'], split: etd_loader_split },
+    'file' => { from: %w[file files], split: '\s*(?:\|~\||[:;|])\s*' }
+  }
 
   # Field mappings
   # Create a completely new set of mappings by replacing the whole set as follows
@@ -69,6 +97,7 @@ Bulkrax.setup do |config|
   #    config.fill_in_blank_source_identifiers = ->(parser, index) { "b-#{parser.importer.id}-#{index}"}
   # or use a uuid
   #    config.fill_in_blank_source_identifiers = ->(parser, index) { SecureRandom.uuid }
+  config.fill_in_blank_source_identifiers = ->(obj, index) { "#{obj.importerexporter.id}-#{index}" }
 
   # Properties that should not be used in imports/exports. They are reserved for use by Hyrax.
   # config.reserved_properties += ['my_field']
@@ -87,8 +116,57 @@ Bulkrax.setup do |config|
   # config.multi_value_element_join_on = ' | '
 end
 
+Bulkrax::CsvEntry.class_eval do
+  # changing call from member_work_ids to member_ids as the former does not return results
+  # removing in_work_ids as redundant, member_of_work_ids works for both works and filesets
+  # removing file_set_ids as redundant, member_ids returns both child works and filesets
+  def build_relationship_metadata
+    # Includes all relationship methods for all exportable record types (works, Collections, FileSets)
+    relationship_methods = {
+      related_parents_parsed_mapping => %i[member_of_collection_ids member_of_work_ids],
+      related_children_parsed_mapping => %i[member_collection_ids member_ids]
+    }
+
+    relationship_methods.each do |relationship_key, methods|
+      next if relationship_key.blank?
+
+      values = []
+      methods.each do |m|
+        values << hyrax_record.public_send(m) if hyrax_record.respond_to?(m)
+      end
+      values = values.flatten.uniq
+      next if values.blank?
+
+      handle_join_on_export(relationship_key, values, mapping[related_parents_parsed_mapping]['join'].present?)
+    end
+  end
+end
+
+Bulkrax::ObjectFactory.class_eval do
+  def self.solr_name(field_name)
+    if defined?(Hyrax) && Hyrax.respond_to?(:index_field_mapper)
+      Hyrax.index_field_mapper.solr_name(field_name)
+    else
+      ActiveFedora.index_field_mapper.solr_name(field_name)
+    end
+  end
+end
+
+Bulkrax::ParserExportRecordSet::Base.class_eval do
+  private
+
+  # An export with no limit makes Bulkrax ask Solr for 2_147_483_647 rows.
+  # SolrCloud sizes the queue that merges its shards' results by rows, so that
+  # fails with java.lang.NegativeArraySizeException. No query can match more
+  # documents than the index holds, so ask for that many instead.
+  def row_limit
+    return limit unless limit.zero?
+
+    @row_limit ||= [ActiveFedora::SolrService.count('*:*'), 1].max
+  end
+end
+
 # Sidebar for hyrax 3+ support
-# rubocop:disable Style/IfUnlessModifier
-if Object.const_defined?(:Hyrax) && ::Hyrax::DashboardController&.respond_to?(:sidebar_partials)
-  Hyrax::DashboardController.sidebar_partials[:repository_content] << "hyrax/dashboard/sidebar/bulkrax_sidebar_additions"
+if Object.const_defined?(:Hyrax) && ::Hyrax::DashboardController.respond_to?(:sidebar_partials)
+  Hyrax::DashboardController.sidebar_partials[:repository_content] << 'hyrax/dashboard/sidebar/bulkrax_sidebar_additions'
 end
