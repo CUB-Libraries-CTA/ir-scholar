@@ -1,5 +1,8 @@
 ARG ALPINE_VERSION=3.16
 ARG RUBY_VERSION=2.7.8
+ARG NODE_VERSION=22
+
+FROM node:$NODE_VERSION-alpine AS node
 
 ###############################################################################
 # Stage 1a: ClamAV Builder – compile ClamAV from source (runs in parallel)
@@ -58,6 +61,12 @@ ARG DATABASE_APK_PACKAGE="sqlite-libs mariadb-dev"
 # Added python3 to the main apk install to consolidate Python setup
 ARG EXTRA_APK_PACKAGES="git tzdata python3"
 
+COPY --link --from=node /usr/lib /usr/lib
+COPY --link --from=node /usr/local/share /usr/local/share
+COPY --link --from=node /usr/local/lib /usr/local/lib
+COPY --link --from=node /usr/local/include /usr/local/include
+COPY --link --from=node /usr/local/bin /usr/local/bin
+
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --update --no-cache add build-base \
@@ -67,7 +76,6 @@ RUN apk update && \
     unzip \
     yaml \
     zlib-dev \
-    nodejs \
     yarn \
     $DATABASE_APK_PACKAGE \
     $EXTRA_APK_PACKAGES && \
@@ -142,8 +150,14 @@ ENV RAILS_ENV=${RAILS_ENV}
 
 # Install only runtime packages (no build-base, compilers, cmake, etc.)
 ARG DATABASE_APK_PACKAGE="mariadb-connector-c-dev"
-ARG RUNTIME_APK_PACKAGES="bash curl openjdk17 yaml nodejs libreoffice imagemagick ghostscript vim ffmpeg \
+ARG RUNTIME_APK_PACKAGES="bash curl openjdk17 yaml libreoffice imagemagick ghostscript vim ffmpeg \
   tzdata python3 json-c libmilter libxml2 pcre2 zlib gcompat libunwind ncurses openssl libssl3"
+
+COPY --link --from=node /usr/lib /usr/lib
+COPY --link --from=node /usr/local/share /usr/local/share
+COPY --link --from=node /usr/local/lib /usr/local/lib
+COPY --link --from=node /usr/local/include /usr/local/include
+COPY --link --from=node /usr/local/bin /usr/local/bin
 
 RUN apk update && \
     apk --no-cache upgrade && \
