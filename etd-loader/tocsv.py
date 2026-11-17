@@ -241,14 +241,16 @@ def tocsv(source, file_number, folder_file_name, zip_file_path, rejected_path, u
                         csv_data.append(transform(itm, file_number, source + '/', file, folder_file_name))
                         writeCsvFile(source + '/', csv_data, error_data)
                         print('- Execute Rake Task: ' + 'rake etd_import:upload[' + source + '/dissertation_dataload.csv] --trace')
-                        if (os.system('rake etd_import:upload[' + source + '/dissertation_dataload.csv] --trace')) == 0:
+                        rake_status = os.system('rake etd_import:upload[' + source + '/dissertation_dataload.csv] --trace')
+                        if rake_status == 0:
                             os.system('mv ' + zip_file_path + ' ' + zip_file_path+'.processed')
                             print('- Converted .zip to .zip.processed')
                             print('- Done')
                             logger.debug('Success: ' + folder_file_name)
                         else:
-                            print('- Error Found:' + str(e))
-                            logger.error('- Log: ' + zip_file_path + ' : ' + str(e))
+                            error_message = 'rake etd_import:upload failed with status ' + str(rake_status)
+                            print('- Error Found:' + error_message)
+                            logger.error('- Log: ' + zip_file_path + ' : ' + error_message)
                             os.system('mv ' + zip_file_path + ' ' + rejected_path)
                             print('- Moved to Rejected folder')
     except Exception as e:
