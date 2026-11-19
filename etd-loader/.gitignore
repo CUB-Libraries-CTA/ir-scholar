@@ -1,0 +1,3 @@
+# Real ETD zips used for testing (see test/README.md). They contain personal details,
+# so they're never committed.
+etds/

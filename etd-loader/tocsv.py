@@ -10,15 +10,22 @@ from dateutil.parser import parse
 from functools import reduce
 from datetime import datetime
 import logging
+from xml.parsers.expat import ExpatError
 from xmltos3 import xmltos3
 
 efs_url_env = 'test'
 logger = logging.getLogger('etd-loader')
-hdlr = logging.FileHandler('/efs/' + efs_url_env+ '/proquest/logs/etd-loader-' + '{date:%Y-%m-%d_%H:%M:%S}.log'.format(date=datetime.now()))
-formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-hdlr.setFormatter(formatter)
-logger.addHandler(hdlr)
-logger.setLevel(logging.DEBUG)
+
+def setupFileLogging():
+    # Done when tocsv() runs rather than on import, so bagit_builder.py can import this
+    # module on machines without /efs.
+    if logger.handlers:
+        return
+    hdlr = logging.FileHandler('/efs/' + efs_url_env+ '/proquest/logs/etd-loader-' + '{date:%Y-%m-%d_%H:%M:%S}.log'.format(date=datetime.now()))
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    hdlr.setFormatter(formatter)
+    logger.addHandler(hdlr)
+    logger.setLevel(logging.DEBUG)
 
 csv_divider = "|~|"
 
@@ -49,7 +56,7 @@ defaults = {
             'location':''
             }
 
-def transform(itm, file_number, source, file_name, folder_file_name):
+def transform(itm, file_number, source, file_name, folder_file_name, upload_xml=True, list_files=True):
     data_row = dict.fromkeys(csv_headers, '')
     data_row.update(defaults)
 
@@ -89,7 +96,8 @@ def transform(itm, file_number, source, file_name, folder_file_name):
     else:
         data_row['contributor_committeemember'] = ''
 
-    data_row['files'] = folder_file_name + '/' + content['DISS_binary']['#text']
+    if list_files:
+        data_row['files'] = folder_file_name + '/' + content['DISS_binary']['#text']
 
     data_row['date_issued'] = getDate(repository.get('DISS_agreement_decision_date', None),description.get('DISS_dates', None))
 
@@ -101,7 +109,8 @@ def transform(itm, file_number, source, file_name, folder_file_name):
 
     data_row['graduation_year'] = data_row['date_issued'].split('-')[0]
 
-    if 'DISS_attachment' in itm['DISS_content']:
+    # The attachments are assumed to be in the package's first subfolder.
+    if list_files and 'DISS_attachment' in itm['DISS_content']:
         subFolder = next(os.walk(source))[1]
         newFileName = []
         if type(itm['DISS_content']['DISS_attachment']) is not list:
@@ -111,7 +120,7 @@ def transform(itm, file_number, source, file_name, folder_file_name):
                 newFileName.append(folder_file_name+'/'+subFolder[0]+'/'+attachment['DISS_file_name'])
             data_row['files'] += '|~|' + '|~|'.join(newFileName)
     data_row['degree_name'] = description['DISS_degree']
-    data_row['replaces'] = replaces(file_number,source,file_name)
+    data_row['replaces'] = replaces(file_number,source,file_name,upload_xml)
     return data_row
 
 def getDegreeLevel(description):
@@ -121,14 +130,14 @@ def getDegreeLevel(description):
         return 'Doctoral'
 
 def getVisibility(embargo_code, release_date):
-    if embargo_code is '0':
+    if embargo_code == '0':
         return 'open'
     elif release_date > '{date:%Y-%m-%d}'.format(date=datetime.now()):
         return 'embargo'
     else:
         return 'open'
 def getReleaseDate(embargo_code, restriction):
-    if embargo_code is not '0':
+    if embargo_code != '0':
         if restriction is not None:
             release_date = restriction.get('DISS_sales_restriction', None)
             splitRDate = release_date.get('@remove').split('/')
@@ -192,9 +201,9 @@ def formatName(name):
     sur_name = name.get('DISS_surname', '')
     suffix = name.get('DISS_suffix', '')
     middle_name = name.get('DISS_middle', '')
-    if suffix is None or suffix is '':
+    if suffix is None or suffix == '':
         return '{}, {} {}'.format(xstr(sur_name), xstr(first_name), xstr(middle_name))
-    if (suffix is None or suffix is '') and (middle_name is None or middle_name is ''):
+    if (suffix is None or suffix == '') and (middle_name is None or middle_name == ''):
         return '{}, {}'.format(xstr(sur_name), xstr(first_name))
     return '{}, {} {}, {}'.format(xstr(sur_name), xstr(first_name), xstr(middle_name), xstr(suffix))
 
@@ -209,50 +218,87 @@ def academicAffiliation(itm):
             return aa['samvera']
     return 'Other'
 
-def replaces(file_number, source, file):
+def replaces(file_number, source, file, upload_xml=True):
+    if not upload_xml:
+        return file_number
     url = xmltos3(source, file)
     return "{0}|{1}".format(file_number, url)
 
 def writeCsvFile(source, csv_data, error_data):
     now = datetime.now().isoformat().replace(':', '').split('.')[0]
     keys = csv_data[0].keys()
-    with open(source + '{0}_dataload.csv'.format(defaults['resource type'].lower()), 'w') as output_file:
+    # newline='' stops Windows turning the csv module's \r\n into \r\r\n, and the
+    # importer reads the CSV as UTF-8 whatever the OS's default encoding is.
+    with open(source + '{0}_dataload.csv'.format(defaults['resource type'].lower()), 'w', newline='', encoding='utf-8') as output_file:
         dict_writer = csv.DictWriter(output_file, keys)
         dict_writer.writeheader()
         dict_writer.writerows(csv_data)
         print('- Converted to : ' + source + '{0}_dataload.csv'.format(defaults['resource type'].lower()))
 
+def readSubmission(path):
+    # Parsed from bytes so the XML declaration decides the encoding (UTF-8 if there is
+    # none). Only input that isn't valid UTF-8 is retried as ISO-8859-1, as the Ruby
+    # port (etd_loader.rb) does.
+    with open(path, 'rb') as fd:
+        data = fd.read()
+    try:
+        submission = xmltodict.parse(data, process_namespaces=True)
+    except ExpatError:
+        if isUtf8(data):
+            raise
+        submission = xmltodict.parse(data, encoding='ISO-8859-1', process_namespaces=True)
+    return submission['DISS_submission']
+
+def isUtf8(data):
+    try:
+        data.decode('utf-8')
+    except UnicodeDecodeError:
+        return False
+    return True
+
+def isAccepted(itm):
+    # A record without DISS_repository raises KeyError (older ProQuest records lack it).
+    repository = itm['DISS_repository']
+    if repository is None:
+        # An empty <DISS_repository/>.
+        return False
+    acceptance = repository.get('DISS_acceptance')
+    if isinstance(acceptance, dict):
+        # <DISS_acceptance> with attributes; its text is under '#text'.
+        acceptance = acceptance.get('#text')
+    return acceptance is not None and acceptance != '0'
+
 def tocsv(source, file_number, folder_file_name, zip_file_path, rejected_path, unaccepted_path):
     csv_data = []
     error_data = []
+    setupFileLogging()
     os.chdir('/data')
     try:
         for file in os.listdir(source):
             if file.endswith(".xml"):
                 print("- Found: " + file)
-                with open(source + '/' + file, encoding="ISO-8859-1") as fd:
-                    itm = xmltodict.parse(fd.read(), process_namespaces=True)['DISS_submission']
-                    if itm['DISS_repository'].get('DISS_acceptance') is None or itm['DISS_repository'].get('DISS_acceptance') is '0':
-                        print('- Log: ' + zip_file_path + ':is not accepted')
-                        logger.error(zip_file_path + ' : ' + 'is not accepted')
-                        os.system('mv ' + zip_file_path + ' ' + unaccepted_path)
-                        print('- Moved to UNACCEPTED folder')
+                itm = readSubmission(source + '/' + file)
+                if not isAccepted(itm):
+                    print('- Log: ' + zip_file_path + ':is not accepted')
+                    logger.error(zip_file_path + ' : ' + 'is not accepted')
+                    os.system('mv ' + zip_file_path + ' ' + unaccepted_path)
+                    print('- Moved to UNACCEPTED folder')
+                else:
+                    csv_data.append(transform(itm, file_number, source + '/', file, folder_file_name))
+                    writeCsvFile(source + '/', csv_data, error_data)
+                    print('- Execute Rake Task: ' + 'rake etd_import:upload[' + source + '/dissertation_dataload.csv] --trace')
+                    rake_status = os.system('rake etd_import:upload[' + source + '/dissertation_dataload.csv] --trace')
+                    if rake_status == 0:
+                        os.system('mv ' + zip_file_path + ' ' + zip_file_path+'.processed')
+                        print('- Converted .zip to .zip.processed')
+                        print('- Done')
+                        logger.debug('Success: ' + folder_file_name)
                     else:
-                        csv_data.append(transform(itm, file_number, source + '/', file, folder_file_name))
-                        writeCsvFile(source + '/', csv_data, error_data)
-                        print('- Execute Rake Task: ' + 'rake etd_import:upload[' + source + '/dissertation_dataload.csv] --trace')
-                        rake_status = os.system('rake etd_import:upload[' + source + '/dissertation_dataload.csv] --trace')
-                        if rake_status == 0:
-                            os.system('mv ' + zip_file_path + ' ' + zip_file_path+'.processed')
-                            print('- Converted .zip to .zip.processed')
-                            print('- Done')
-                            logger.debug('Success: ' + folder_file_name)
-                        else:
-                            error_message = 'rake etd_import:upload failed with status ' + str(rake_status)
-                            print('- Error Found:' + error_message)
-                            logger.error('- Log: ' + zip_file_path + ' : ' + error_message)
-                            os.system('mv ' + zip_file_path + ' ' + rejected_path)
-                            print('- Moved to Rejected folder')
+                        error_message = 'rake etd_import:upload failed with status ' + str(rake_status)
+                        print('- Error Found:' + error_message)
+                        logger.error('- Log: ' + zip_file_path + ' : ' + error_message)
+                        os.system('mv ' + zip_file_path + ' ' + rejected_path)
+                        print('- Moved to Rejected folder')
     except Exception as e:
         print('- Error Found:' + str(e))
         logger.error('- Log: ' + zip_file_path + ' : ' + str(e))

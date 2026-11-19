@@ -1,0 +1,2 @@
+# Packages the tests need on top of ../requirements.txt.
+pytest==9.2.0

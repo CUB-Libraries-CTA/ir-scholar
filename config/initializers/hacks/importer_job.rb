@@ -11,7 +11,10 @@ Bulkrax::ImporterJob.class_eval do
     return unless parser.file? && parser.zip?
 
     parser.unzip(parser.parser_fields['import_file_path'])
-    write_proquest_csv(parser) if parser.is_a?(Bulkrax::CsvParser)
+    # instance_of? rather than is_a?: BagitParser is a CsvParser too, but bags already
+    # hold their metadata CSV (see etd-loader/bagit_builder.py), and moving their files
+    # into files/ would break them.
+    write_proquest_csv(parser) if parser.instance_of?(Bulkrax::CsvParser)
     parser.remove_spaces_from_filenames
   end
 
