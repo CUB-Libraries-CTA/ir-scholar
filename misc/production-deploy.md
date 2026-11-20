@@ -21,6 +21,67 @@ storage class set aws-
         $ solr create -c hydra-prod -n scholar -shards 2
 
 
+## ClamAV sidecar (worker)
+
+Uploads are virus-scanned in the worker (`IngestJob` on Sidekiq) through
+`Scholar::ClambyVirusScanner`, which runs `clamdscan --fdpass` against a `clamd`
+sidecar. Add this to the **worker** Deployment only; the web image has no ClamAV
+client and never scans.
+
+The official image creates its socket at `/tmp/clamd.sock`, so one `emptyDir` is
+mounted at `/tmp` in the sidecar and at `/run/clamav` in the worker, where the
+worker image's `/etc/clamav/clamd.conf` expects `/run/clamav/clamd.sock`.
+
+```yaml
+spec:
+  template:
+    spec:
+      volumes:
+        - name: clamav-socket
+          emptyDir: {}
+      initContainers:
+        # Native sidecar (Kubernetes >= 1.29): starts before the worker, and the worker
+        # waits for its startupProbe. Keep the tag in sync with CLAMAV_VERSION in the Dockerfile.
+        - name: clamav
+          image: clamav/clamav:1.4
+          restartPolicy: Always
+          volumeMounts:
+            - name: clamav-socket
+              mountPath: /tmp
+          resources:
+            requests:
+              memory: 1536Mi
+            limits:
+              memory: 3Gi # a signature reload briefly holds two databases in memory
+          startupProbe:
+            exec:
+              command: ["clamdcheck.sh"]
+            periodSeconds: 10
+            failureThreshold: 60 # first start may download the DB, then load it
+          readinessProbe:
+            exec:
+              command: ["clamdcheck.sh"]
+            periodSeconds: 30
+      containers:
+        - name: worker # the existing worker container; add only this mount
+          volumeMounts:
+            - name: clamav-socket
+              mountPath: /run/clamav
+```
+
+* On clusters older than 1.29, move the `clamav` entry from `initContainers` to
+  `containers` and drop `restartPolicy`. Sidekiq may then start before `clamd` is
+  ready; ingest jobs in that window raise `Clamby::ClamscanClientError` and retry.
+* `freshclam` in the sidecar updates signatures daily and needs outbound HTTPS to
+  `database.clamav.net`.
+* The official config also has `clamd` listen on TCP 3310 on the pod IP (its
+  `clamdcheck.sh` probe uses it). Nothing in the app does; restrict it with a
+  NetworkPolicy if the namespace isn't already locked down.
+* `clamd` reports files larger than `MaxFileSize` (100M) / `MaxScanSize` (400M) as
+  clean after a partial scan. Raise them with `CLAMD_CONF_MaxFileSize` /
+  `CLAMD_CONF_MaxScanSize` env vars on the sidecar if needed.
+
+
 ## Scholar Administration set 
 
 
