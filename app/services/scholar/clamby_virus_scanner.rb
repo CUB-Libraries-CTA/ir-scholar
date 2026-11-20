@@ -13,6 +13,10 @@ module Scholar
     def infected?
       result = Clamby.virus?(file)
       raise ScanError, "Unable to scan #{file} for viruses" if result.nil?
+      # Clamby reports any unexpected clamdscan exit status as a virus; only exit 1 is a detection
+      if result && Clamby::Command.scan_status != 1
+        raise ScanError, "Unable to scan #{file} for viruses: clamdscan exited #{Clamby::Command.scan_status.inspect}"
+      end
 
       warning("A virus was found in #{file}") if result
       result

@@ -62,6 +62,14 @@ spec:
             exec:
               command: ["clamdcheck.sh"]
             periodSeconds: 30
+          # Restarts a hung clamd; scans have no timeout, so a hang would otherwise
+          # block ingest jobs. Generous because a busy clamd can be slow to answer PING.
+          livenessProbe:
+            exec:
+              command: ["clamdcheck.sh"]
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 5
       containers:
         - name: worker # the existing worker container; add only this mount
           volumeMounts:
@@ -77,9 +85,11 @@ spec:
 * The official config also has `clamd` listen on TCP 3310 on the pod IP (its
   `clamdcheck.sh` probe uses it). Nothing in the app does; restrict it with a
   NetworkPolicy if the namespace isn't already locked down.
-* `clamd` reports files larger than `MaxFileSize` (100M) / `MaxScanSize` (400M) as
-  clean after a partial scan. Raise them with `CLAMD_CONF_MaxFileSize` /
-  `CLAMD_CONF_MaxScanSize` env vars on the sidecar if needed.
+* Files larger than `MaxFileSize` (default 100M) are not scanned at all and are
+  reported clean. Scanning also stops once `MaxScanSize` (default 400M) of data has
+  been read, e.g. from an archive's contents, and the file is reported clean. Raise
+  them with `CLAMD_CONF_MaxFileSize` / `CLAMD_CONF_MaxScanSize` env vars on the
+  sidecar if needed.
 
 
 ## Scholar Administration set 
