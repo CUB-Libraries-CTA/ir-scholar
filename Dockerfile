@@ -28,7 +28,7 @@ ENV LC_ALL=C.UTF-8
 ARG RUBYGEMS_VERSION=3.2.34
 # Changed sqlite-dev to sqlite-libs (only runtime lib needed for gem linking)
 ARG DATABASE_APK_PACKAGE="sqlite-libs mariadb-dev"
-# Removed runtime-only packages (libreoffice, imagemagick, ghostscript, vim, ffmpeg, freshclam, clamav-daemon) from builder
+# Removed runtime-only packages (libreoffice, imagemagick, ghostscript, vim, ffmpeg) from builder
 # Added python3 to the main apk install to consolidate Python setup
 ARG EXTRA_APK_PACKAGES="git tzdata python3"
 
@@ -122,7 +122,7 @@ ENV RAILS_ENV=${RAILS_ENV}
 # Install only runtime packages (no build-base, compilers, cmake, etc.)
 ARG DATABASE_APK_PACKAGE="mariadb-connector-c-dev"
 ARG RUNTIME_APK_PACKAGES="bash curl openjdk17 yaml libreoffice imagemagick ghostscript vim ffmpeg \
-  tzdata python3 json-c libmilter libxml2 pcre2 zlib gcompat libunwind ncurses openssl libssl3"
+  tzdata python3"
 
 COPY --link --from=node /usr/lib /usr/lib
 COPY --link --from=node /usr/local/share /usr/local/share
