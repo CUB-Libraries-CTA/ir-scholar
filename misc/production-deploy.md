@@ -45,6 +45,13 @@ spec:
         - name: clamav
           image: clamav/clamav:1.4
           restartPolicy: Always
+          env:
+            # Scan files (and archive contents) up to 1GB; larger ones are reported clean
+            # without being scanned. clamd's defaults are 100M / 400M.
+            - name: CLAMD_CONF_MaxFileSize
+              value: 1024M
+            - name: CLAMD_CONF_MaxScanSize
+              value: 1024M
           volumeMounts:
             - name: clamav-socket
               mountPath: /tmp
@@ -85,11 +92,12 @@ spec:
 * The official config also has `clamd` listen on TCP 3310 on the pod IP (its
   `clamdcheck.sh` probe uses it). Nothing in the app does; restrict it with a
   NetworkPolicy if the namespace isn't already locked down.
-* Files larger than `MaxFileSize` (default 100M) are not scanned at all and are
-  reported clean. Scanning also stops once `MaxScanSize` (default 400M) of data has
-  been read, e.g. from an archive's contents, and the file is reported clean. Raise
-  them with `CLAMD_CONF_MaxFileSize` / `CLAMD_CONF_MaxScanSize` env vars on the
-  sidecar if needed.
+* Files larger than `MaxFileSize` (set to 1024M above) are not scanned at all and
+  are reported clean. Scanning also stops once `MaxScanSize` (1024M) of data has
+  been read, e.g. from an archive's contents, and the file is reported clean.
+* clamd unpacks archives into its temp directory, which is the shared `/tmp`
+  `emptyDir`, so scanning a 1GB archive can use about that much of the pod's
+  ephemeral storage.
 
 
 ## Scholar Administration set 
