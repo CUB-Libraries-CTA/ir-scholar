@@ -188,6 +188,7 @@ GEM
       activesupport (>= 4.0.0)
       mime-types (>= 1.16)
       ssrf_filter (~> 1.0, < 1.1.0)
+    clamby (1.6.11)
     clipboard-rails (1.7.1)
     coffee-rails (4.2.2)
       coffee-script (>= 2.2.0)
@@ -1040,6 +1041,7 @@ DEPENDENCIES
   bootstrap-sass (~> 3.0)
   byebug
   capybara (>= 2.15)
+  clamby (~> 1.6)
   coffee-rails (~> 4.2)
   devise
   devise-guests (~> 0.6)

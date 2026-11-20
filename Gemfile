@@ -120,3 +120,6 @@ gem "sprockets", "= 3.7.2"
 gem "ffi", "= 1.17.2"
 
 gem "okcomputer", "~> 1.19"
+
+# Virus scanning through clamdscan and the clamd sidecar (see config/initializers/clamby.rb)
+gem "clamby", "~> 1.6"
