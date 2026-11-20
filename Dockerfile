@@ -3,13 +3,17 @@ ARG RUBY_VERSION=2.7.8
 ARG NODE_VERSION=22
 ARG CLAMAV_VERSION=1.4
 
+###############################################################################
+# Stage 0: NodeJS and the ClamAV client, taken from their official images
+# instead of Alpine 3.16's outdated packages or compiling them ourselves
+###############################################################################
 FROM node:$NODE_VERSION-alpine AS node
 
-###############################################################################
-# Stage 0: ClamAV client – clamdscan plus its own shared libraries, isolated in
-# /opt/clamav because the official image is built on a newer Alpine (OpenSSL 3.4+)
-# than our ruby:2.7.8-alpine3.16 runtime
-###############################################################################
+# clamdscan plus its own shared libraries, isolated in /opt/clamav because the official
+# image is built on a newer Alpine (OpenSSL 3.4+) than our ruby:$RUBY_VERSION-alpine$ALPINE_VERSION
+# runtime. The official image is published for linux/amd64 only, so the hyrax-worker
+# target (the default, as the last stage) must be built with --platform linux/amd64.
+# Keep the RUN below directly under this FROM: a RUN belongs to the nearest FROM above it.
 FROM clamav/clamav:$CLAMAV_VERSION AS clamav
 
 RUN mkdir -p /opt/clamav/bin /opt/clamav/lib && \
@@ -26,12 +30,16 @@ ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
 ARG RUBYGEMS_VERSION=3.2.34
-# Changed sqlite-dev to sqlite-libs (only runtime lib needed for gem linking)
+# mariadb-dev is needed to compile the mysql2 gem. sqlite-libs is a leftover: the sqlite3
+# gem is in the development group, which this image doesn't install.
 ARG DATABASE_APK_PACKAGE="sqlite-libs mariadb-dev"
-# Removed runtime-only packages (libreoffice, imagemagick, ghostscript, vim, ffmpeg) from builder
-# Added python3 to the main apk install to consolidate Python setup
+# Runtime-only tools (LibreOffice, ImageMagick, Ghostscript, ffmpeg, vim) are installed in
+# the runtime stage only
 ARG EXTRA_APK_PACKAGES="git tzdata python3"
 
+# NodeJS for asset precompilation. Node itself only needs libstdc++ and
+# libgcc_s from /usr/lib; copying all of it also brings the node image's Alpine libraries
+# (libcrypto/libssl 3, libz, libapk), which nothing here uses and apk doesn't track.
 COPY --link --from=node /usr/lib /usr/lib
 COPY --link --from=node /usr/local/share /usr/local/share
 COPY --link --from=node /usr/local/lib /usr/local/lib
@@ -84,11 +92,15 @@ RUN pip install --no-cache-dir -r /data/requirements.txt
 # Now copy the rest of the source
 COPY . /data/
 
+# Workaround for missing work thumbnails (d391a6e): works without a file show the default
+# work-*.png by its fingerprinted asset path, which can be stored in Solr when the work is
+# indexed. Copy the current image to the fingerprints earlier builds produced so those still resolve.
 RUN cp /data/public/assets/work-*.png /data/public/assets/work-ff055336041c3f7d310ad69109eda4a887b16ec501f35afc0a547c4adb97ee72.png && \
     cp /data/public/assets/work-ff055336041c3f7d310ad69109eda4a887b16ec501f35afc0a547c4adb97ee72.png /data/public/assets/work-a6ad224077dcf8d7342d3f671bab54554d5e2e1b9b1506a25411a840b1c85202.png && \
     cp /data/public/assets/work-ff055336041c3f7d310ad69109eda4a887b16ec501f35afc0a547c4adb97ee72.png /data/public/assets/work-e8271462ebe82228c43c3ebe6851235c8919bef84a6360d412615e8e48e38f89.png
 
-
+# FITS characterizes uploaded files for Hyrax (CharacterizeJob). Its bundled mediainfo
+# libraries are built for glibc and don't load on Alpine; the Java-based tools still work.
 RUN mkdir -p /opt/fits && \
     curl -fSL -o /opt/fits-1.6.0.zip https://github.com/harvard-lts/fits/releases/download/1.6.0/fits-1.6.0.zip && \
     cd /opt && unzip fits-1.6.0.zip -d /opt/fits && rm fits-1.6.0.zip  && chmod +X /opt/fits/fits.sh
@@ -119,17 +131,20 @@ ENV LC_ALL=C.UTF-8
 ARG RAILS_ENV=production
 ENV RAILS_ENV=${RAILS_ENV}
 
-# Install only runtime packages (no build-base, compilers, cmake, etc.)
+# Install only runtime packages (no build-base or compilers)
 ARG DATABASE_APK_PACKAGE="mariadb-connector-c-dev"
 ARG RUNTIME_APK_PACKAGES="bash curl openjdk17 yaml libreoffice imagemagick ghostscript vim ffmpeg \
   tzdata python3"
 
+# NodeJS in the runtime image too; see the builder stage for what copying /usr/lib brings along
 COPY --link --from=node /usr/lib /usr/lib
 COPY --link --from=node /usr/local/share /usr/local/share
 COPY --link --from=node /usr/local/lib /usr/local/lib
 COPY --link --from=node /usr/local/include /usr/local/include
 COPY --link --from=node /usr/local/bin /usr/local/bin
 
+# Mountain Time so log timestamps match local time; then remove apk so packages can't be
+# installed in the running container
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --update --no-cache add \
@@ -160,6 +175,9 @@ WORKDIR /data
 
 EXPOSE 3000/tcp
 
+###############################################################################
+# Stage 3: Final images – web (Puma) and worker (Sidekiq)
+###############################################################################
 FROM hyrax-base AS hyrax-web
 
 CMD ["bundle", "exec", "puma", "-C", "config/puma/production.rb"]
@@ -169,7 +187,9 @@ FROM hyrax-base AS hyrax-worker
 
 # Only the worker scans uploads (IngestJob on Sidekiq), so only it gets the clamdscan client;
 # clamd runs in a sidecar container from the official clamav/clamav image and is reached
-# through the shared /run/clamav socket
+# through the shared /run/clamav socket. The /usr/local/bin/clamdscan wrapper points
+# clamdscan at its own libraries in /opt/clamav/lib for that process only, and the build
+# fails here if clamdscan can't load them.
 COPY --link --from=clamav /opt/clamav /opt/clamav
 RUN mkdir -p /etc/clamav /run/clamav && \
     printf 'LocalSocket /run/clamav/clamd.sock\n' > /etc/clamav/clamd.conf && \
