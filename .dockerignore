@@ -58,3 +58,15 @@ blazegraph.jnl
 /test
 /solr
 /misc
+
+# Local-only files that must never end up in an image
+# (credentials, build outputs the Dockerfile produces itself, local tooling)
+*.p12
+/public/assets
+/public/uv
+**/.venv
+**/__pycache__
+.mypy_cache
+.idea
+.superpowers
+/docs

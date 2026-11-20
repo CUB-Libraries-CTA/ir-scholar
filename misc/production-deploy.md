@@ -21,6 +21,28 @@ storage class set aws-
         $ solr create -c hydra-prod -n scholar -shards 2
 
 
+## Google Analytics key
+
+The Google service account key (`*.p12`) is kept out of the images by `.dockerignore`.
+`config/analytics.yml` only sets the GA4 tracking ID today, so nothing reads the key. If
+Hyrax analytics reporting is turned back on (`privkey_path`, `privkey_secret`,
+`client_email` and the other GA4 keys in `config/analytics.yml`), mount the key from a
+Kubernetes Secret and point `privkey_path` at the mounted file instead of baking it in:
+
+```yaml
+      volumes:
+        - name: analytics-key
+          secret:
+            secretName: scholar-analytics-key
+      containers:
+        - name: web # and the worker, if it reports analytics
+          volumeMounts:
+            - name: analytics-key
+              mountPath: /etc/scholar/analytics
+              readOnly: true
+```
+
+
 ## ClamAV sidecar (worker)
 
 Uploads are virus-scanned in the worker (`IngestJob` on Sidekiq) through

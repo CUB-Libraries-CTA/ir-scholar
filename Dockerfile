@@ -21,7 +21,8 @@ RUN mkdir -p /opt/clamav/bin /opt/clamav/lib && \
     ldd /usr/bin/clamdscan | awk '$3 ~ /^\/usr\/lib\// {print $3}' | xargs -I{} cp -L {} /opt/clamav/lib/
 
 ###############################################################################
-# Stage 1: Builder – install gems, precompile assets, install FITS & pip deps
+# Stage 1: Builder – install gems, JS and pip deps, copy the app, precompile assets,
+# install FITS
 ###############################################################################
 FROM ruby:$RUBY_VERSION-alpine$ALPINE_VERSION AS builder
 
@@ -37,14 +38,15 @@ ARG DATABASE_APK_PACKAGE="sqlite-libs mariadb-dev"
 # the runtime stage only
 ARG EXTRA_APK_PACKAGES="git tzdata python3"
 
-# NodeJS for asset precompilation. Node itself only needs libstdc++ and
-# libgcc_s from /usr/lib; copying all of it also brings the node image's Alpine libraries
-# (libcrypto/libssl 3, libz, libapk), which nothing here uses and apk doesn't track.
+# NodeJS and yarn (in /opt) for JS dependencies and asset precompilation. Node itself only
+# needs libstdc++ and libgcc_s from /usr/lib; copying all of it also brings the node image's
+# Alpine libraries (libcrypto/libssl 3, libz, libapk), which nothing here uses and apk doesn't track.
 COPY --link --from=node /usr/lib /usr/lib
 COPY --link --from=node /usr/local/share /usr/local/share
 COPY --link --from=node /usr/local/lib /usr/local/lib
 COPY --link --from=node /usr/local/include /usr/local/include
 COPY --link --from=node /usr/local/bin /usr/local/bin
+COPY --link --from=node /opt /opt
 
 RUN apk update && \
     apk --no-cache upgrade && \
@@ -55,7 +57,6 @@ RUN apk update && \
     unzip \
     yaml \
     zlib-dev \
-    yarn \
     $DATABASE_APK_PACKAGE \
     $EXTRA_APK_PACKAGES && \
     ln -sf /usr/bin/python3 /usr/bin/python && \
@@ -72,32 +73,50 @@ COPY Gemfile Gemfile.lock /data/
 ARG RAILS_ENV=production
 ENV RAILS_ENV=${RAILS_ENV}
 
-# Update RubyGems system.  RubyGems v3 installs bundler
+# Update RubyGems system (RubyGems v3 installs bundler), then install gems without the
+# development and test groups
 RUN gem update --system $RUBYGEMS_VERSION \
     && bundle config set --local without 'development test' \
     && bundle install --jobs "$(nproc)" \
     && rm -rf /data/tmp \
     && mkdir /data/tmp
 
-# Copy package.json and yarn.lock for JS dependency caching
+# JS dependencies (cached separately from the source). The postinstall script builds
+# public/uv (UniversalViewer) from node_modules and config/uv; node_modules is also an asset
+# path for the precompile below.
 COPY package.json yarn.lock /data/
-RUN if [ "${RAILS_ENV}" = "production" ]; then \
-  RAILS_ENV=$RAILS_ENV SCHOLARS_SECRET_KEY_BASE=temporary bundle exec rails assets:precompile; \
-  fi
+COPY config/uv /data/config/uv
+# yarn.lock fetches one public GitHub dependency over SSH; fetch it over HTTPS instead
+RUN mkdir -p /data/public && \
+    git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" && \
+    yarn install --frozen-lockfile && \
+    yarn cache clean
 
 # Copy requirements.txt separately for pip dependency caching
 COPY requirements.txt /data/
 RUN pip install --no-cache-dir -r /data/requirements.txt
 
-# Now copy the rest of the source
+# Now copy the rest of the source. .dockerignore keeps out locally built public/assets,
+# public/uv and node_modules, so the image is built from the repo, not the build machine.
 COPY . /data/
 
-# Workaround for missing work thumbnails (d391a6e): works without a file show the default
-# work-*.png by its fingerprinted asset path, which can be stored in Solr when the work is
-# indexed. Copy the current image to the fingerprints earlier builds produced so those still resolve.
-RUN cp /data/public/assets/work-*.png /data/public/assets/work-ff055336041c3f7d310ad69109eda4a887b16ec501f35afc0a547c4adb97ee72.png && \
-    cp /data/public/assets/work-ff055336041c3f7d310ad69109eda4a887b16ec501f35afc0a547c4adb97ee72.png /data/public/assets/work-a6ad224077dcf8d7342d3f671bab54554d5e2e1b9b1506a25411a840b1c85202.png && \
-    cp /data/public/assets/work-ff055336041c3f7d310ad69109eda4a887b16ec501f35afc0a547c4adb97ee72.png /data/public/assets/work-e8271462ebe82228c43c3ebe6851235c8919bef84a6360d412615e8e48e38f89.png
+# Precompile assets (production only). Rails runs `yarn install` again first, as
+# NODE_ENV=production unless set, which skips the devDependency shx that the postinstall
+# needs to rebuild public/uv, and ignores the failure; NODE_ENV=development keeps it.
+# Then work around missing work thumbnails (d391a6e):
+# works without a file show the default work-*.png by its fingerprinted asset path, which can
+# be stored in Solr when the work is indexed, so copy the freshly compiled image to the
+# fingerprints earlier builds produced. Fails if the precompile produced more than one work-*.png.
+RUN if [ "${RAILS_ENV}" = "production" ]; then \
+      NODE_ENV=development SCHOLARS_SECRET_KEY_BASE=temporary bundle exec rails assets:precompile && \
+      src=$(ls /data/public/assets/work-*.png) && \
+      for digest in ff055336041c3f7d310ad69109eda4a887b16ec501f35afc0a547c4adb97ee72 \
+                    a6ad224077dcf8d7342d3f671bab54554d5e2e1b9b1506a25411a840b1c85202 \
+                    e8271462ebe82228c43c3ebe6851235c8919bef84a6360d412615e8e48e38f89; do \
+        dest=/data/public/assets/work-$digest.png; \
+        [ "$src" = "$dest" ] || cp "$src" "$dest" || exit 1; \
+      done; \
+    fi
 
 # FITS characterizes uploaded files for Hyrax (CharacterizeJob). Its bundled mediainfo
 # libraries are built for glibc and don't load on Alpine; the Java-based tools still work.
@@ -114,6 +133,7 @@ RUN rm -rf /usr/local/bundle/cache/*.gem \
     && find /usr/local/bundle/gems/ -name "*.c" -delete \
     && find /usr/local/bundle/gems/ -name "*.o" -delete \
     && rm -rf /data/tmp/cache \
+    && rm -rf /data/node_modules \
     && rm -rf /data/app/assets \
     && rm -rf /data/spec \
     && rm -rf /data/solr \
@@ -154,7 +174,7 @@ RUN apk update && \
     rm -f /sbin/apk && \
     rm -rf /etc/apk /lib/apk /usr/share/apk /var/lib/apk /usr/mysql-test
 
-# Use --link for better BuildKit layer caching
+# Python packages installed with pip in the builder (--link for better BuildKit layer caching)
 COPY --link --from=builder /usr/lib/python3.10/site-packages /usr/lib/python3.10/site-packages
 COPY --link --from=builder /usr/bin/pip /usr/bin/pip
 COPY --link --from=builder /usr/bin/pip3 /usr/bin/pip3
