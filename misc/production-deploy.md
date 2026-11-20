@@ -21,6 +21,36 @@ storage class set aws-
         $ solr create -c hydra-prod -n scholar -shards 2
 
 
+## Running as a non-root user
+
+The web and worker images run as the unprivileged user `scholar` (UID and GID 1000), which
+owns only `/data/tmp` and `/data/log` inside the image. Match it in the Deployments: set the
+user on the app containers (so Kubernetes rejects them if they'd run as root) and `fsGroup`
+on the pod (so mounted volumes are group-writable):
+
+```yaml
+spec:
+  template:
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: web # or worker
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+```
+
+Don't put `runAsNonRoot` at the pod level on the worker: it would also apply to the clamav
+sidecar, whose official image starts as root and drops to its own `clamav` user.
+
+Volumes that already hold files written by the old root-run images (uploads, derivatives
+and anything else mounted under `/data/tmp`) need their ownership changed once, e.g.
+`chown -R 1000:1000` from a one-off pod. `fsGroup` changes group ownership on most volume
+types when they're mounted, but not on NFS-based volumes such as EFS; those need the chown.
+
+
 ## Google Analytics key
 
 The Google service account key (`*.p12`) is kept out of the images by `.dockerignore`.

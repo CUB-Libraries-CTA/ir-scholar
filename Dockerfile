@@ -1,6 +1,7 @@
 ARG ALPINE_VERSION=3.16
 ARG RUBY_VERSION=2.7.8
 ARG NODE_VERSION=22
+# Keep in sync with the worker sidecar's image in misc/production-deploy.md
 ARG CLAMAV_VERSION=1.4
 
 ###############################################################################
@@ -21,8 +22,7 @@ RUN mkdir -p /opt/clamav/bin /opt/clamav/lib && \
     ldd /usr/bin/clamdscan | awk '$3 ~ /^\/usr\/lib\// {print $3}' | xargs -I{} cp -L {} /opt/clamav/lib/
 
 ###############################################################################
-# Stage 1: Builder – install gems, JS and pip deps, copy the app, precompile assets,
-# install FITS
+# Stage 1: Builder – install FITS, gems and JS deps, copy the app, precompile assets
 ###############################################################################
 FROM ruby:$RUBY_VERSION-alpine$ALPINE_VERSION AS builder
 
@@ -53,17 +53,26 @@ RUN apk update && \
     apk --update --no-cache add build-base \
     bash \
     curl \
-    openjdk17 \
     unzip \
     yaml \
     zlib-dev \
     $DATABASE_APK_PACKAGE \
     $EXTRA_APK_PACKAGES && \
-    ln -sf /usr/bin/python3 /usr/bin/python && \
-    python3 -m ensurepip && \
-    pip3 install --no-cache --upgrade pip wheel && \
-    ln -sf /usr/bin/pip3 /usr/bin/pip && \
     mkdir /data
+
+# FITS characterizes uploaded files for Hyrax (CharacterizeJob). Downloaded before any app
+# files are copied so code changes don't re-download it, and checked against a pinned
+# SHA-256 (the release's published MD5 matched when it was pinned). Its bundled mediainfo
+# libraries are built for glibc and don't load on Alpine; the Java-based tools still work.
+ARG FITS_VERSION=1.6.0
+ARG FITS_SHA256=32e436effe7251c5b067ec3f02321d5baf4944b3f0d1010fb8ec42039d9e3b73
+RUN curl -fSL -o /tmp/fits.zip \
+      https://github.com/harvard-lts/fits/releases/download/${FITS_VERSION}/fits-${FITS_VERSION}.zip && \
+    echo "${FITS_SHA256}  /tmp/fits.zip" | sha256sum -c - && \
+    mkdir -p /opt/fits && \
+    unzip -q /tmp/fits.zip -d /opt/fits && \
+    rm /tmp/fits.zip && \
+    chmod +x /opt/fits/fits.sh
 
 WORKDIR /data
 
@@ -92,10 +101,6 @@ RUN mkdir -p /data/public && \
     yarn install --frozen-lockfile && \
     yarn cache clean
 
-# Copy requirements.txt separately for pip dependency caching
-COPY requirements.txt /data/
-RUN pip install --no-cache-dir -r /data/requirements.txt
-
 # Now copy the rest of the source. .dockerignore keeps out locally built public/assets,
 # public/uv and node_modules, so the image is built from the repo, not the build machine.
 COPY . /data/
@@ -117,14 +122,6 @@ RUN if [ "${RAILS_ENV}" = "production" ]; then \
         [ "$src" = "$dest" ] || cp "$src" "$dest" || exit 1; \
       done; \
     fi
-
-# FITS characterizes uploaded files for Hyrax (CharacterizeJob). Its bundled mediainfo
-# libraries are built for glibc and don't load on Alpine; the Java-based tools still work.
-RUN mkdir -p /opt/fits && \
-    curl -fSL -o /opt/fits-1.6.0.zip https://github.com/harvard-lts/fits/releases/download/1.6.0/fits-1.6.0.zip && \
-    cd /opt && unzip fits-1.6.0.zip -d /opt/fits && rm fits-1.6.0.zip  && chmod +X /opt/fits/fits.sh
-
-ENV PATH="/opt/fits:${PATH}"
 
 RUN rails hyrax:install:migrations
 
@@ -151,20 +148,17 @@ ENV LC_ALL=C.UTF-8
 ARG RAILS_ENV=production
 ENV RAILS_ENV=${RAILS_ENV}
 
-# Install only runtime packages (no build-base or compilers)
+# Install only runtime packages (no build-base or compilers). A headless Java runtime is
+# enough for FITS. No NodeJS: assets are precompiled and the app boots without it. Python
+# still comes in as a dependency of libreoffice-common, but none of the repo's Python
+# scripts or their pip packages are installed; they run outside the container.
 ARG DATABASE_APK_PACKAGE="mariadb-connector-c-dev"
-ARG RUNTIME_APK_PACKAGES="bash curl openjdk17 yaml libreoffice imagemagick ghostscript vim ffmpeg \
-  tzdata python3"
-
-# NodeJS in the runtime image too; see the builder stage for what copying /usr/lib brings along
-COPY --link --from=node /usr/lib /usr/lib
-COPY --link --from=node /usr/local/share /usr/local/share
-COPY --link --from=node /usr/local/lib /usr/local/lib
-COPY --link --from=node /usr/local/include /usr/local/include
-COPY --link --from=node /usr/local/bin /usr/local/bin
+ARG RUNTIME_APK_PACKAGES="bash curl openjdk17-jre-headless yaml libreoffice imagemagick ghostscript vim ffmpeg \
+  tzdata"
 
 # Mountain Time so log timestamps match local time; then remove apk so packages can't be
-# installed in the running container
+# installed in the running container. The app runs as the unprivileged user scholar, with
+# fixed numeric IDs so Kubernetes can check runAsNonRoot and set fsGroup.
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --update --no-cache add \
@@ -172,19 +166,18 @@ RUN apk update && \
     $RUNTIME_APK_PACKAGES && \
     cp /usr/share/zoneinfo/America/Denver /etc/localtime && \
     rm -f /sbin/apk && \
-    rm -rf /etc/apk /lib/apk /usr/share/apk /var/lib/apk /usr/mysql-test
+    rm -rf /etc/apk /lib/apk /usr/share/apk /var/lib/apk /usr/mysql-test && \
+    addgroup -S -g 1000 scholar && \
+    adduser -S -D -u 1000 -G scholar -h /home/scholar -s /sbin/nologin scholar
 
-# Python packages installed with pip in the builder (--link for better BuildKit layer caching)
-COPY --link --from=builder /usr/lib/python3.10/site-packages /usr/lib/python3.10/site-packages
-COPY --link --from=builder /usr/bin/pip /usr/bin/pip
-COPY --link --from=builder /usr/bin/pip3 /usr/bin/pip3
-COPY --link --from=builder /usr/bin/python /usr/bin/python
-
-# Copy Ruby gems from builder
+# Copy Ruby gems from builder (--link for better BuildKit layer caching)
 COPY --link --from=builder /usr/local/bundle /usr/local/bundle
 
-# Copy application code from builder
+# Copy application code from builder. It stays owned by root; scholar owns only the
+# directories the app writes to (tmp/ for pids, uploads and derivatives, and log/).
 COPY --link --from=builder /data /data
+RUN mkdir -p /data/tmp/pids /data/log && \
+    chown -R 1000:1000 /data/tmp /data/log
 
 # Copy FITS
 COPY --link --from=builder /opt/fits /opt/fits
@@ -196,9 +189,11 @@ WORKDIR /data
 EXPOSE 3000/tcp
 
 ###############################################################################
-# Stage 3: Final images – web (Puma) and worker (Sidekiq)
+# Stage 3: Final images – web (Puma) and worker (Sidekiq), both running as scholar
 ###############################################################################
 FROM hyrax-base AS hyrax-web
+
+USER 1000:1000
 
 CMD ["bundle", "exec", "puma", "-C", "config/puma/production.rb"]
 
@@ -217,5 +212,7 @@ RUN mkdir -p /etc/clamav /run/clamav && \
     chmod 755 /usr/local/bin/clamdscan && \
     ! LD_LIBRARY_PATH=/opt/clamav/lib ldd /opt/clamav/bin/clamdscan 2>&1 | grep -qE 'not found|Error relocating' && \
     clamdscan --help > /dev/null
+
+USER 1000:1000
 
 CMD ["bundle", "exec", "sidekiq"]
