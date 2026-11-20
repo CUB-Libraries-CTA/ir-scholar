@@ -1,52 +1,23 @@
 ARG ALPINE_VERSION=3.16
 ARG RUBY_VERSION=2.7.8
 ARG NODE_VERSION=22
+ARG CLAMAV_VERSION=1.4
 
 FROM node:$NODE_VERSION-alpine AS node
 
 ###############################################################################
-# Stage 1a: ClamAV Builder – compile ClamAV from source (runs in parallel)
+# Stage 0: ClamAV client – clamdscan plus its own shared libraries, isolated in
+# /opt/clamav because the official image is built on a newer Alpine (OpenSSL 3.4+)
+# than our ruby:2.7.8-alpine3.16 runtime
 ###############################################################################
-FROM ruby:$RUBY_VERSION-alpine$ALPINE_VERSION AS clamav-builder
+FROM clamav/clamav:$CLAMAV_VERSION AS clamav
 
-ARG CLAMAV_PACKAGES="g++ gcc make cmake python3 bzip2-dev check-dev curl-dev json-c-dev libmilter-dev libxml2-dev \
-  linux-headers ncurses-dev openssl libssl3 pcre2-dev zlib-dev musl-dev libunwind-dev gcompat freshclam"
-
-RUN apk update && \
-    apk --no-cache upgrade && \
-    apk --update --no-cache add \
-    bash \
-    curl \
-    $CLAMAV_PACKAGES
-
-# Install Rust, build ClamAV, then remove Rust toolchain in the same layer
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
-    . ~/.cargo/env && rustup toolchain install 1.70.0 && rustup default 1.70.0 && \
-    curl -fSL -o ~/clamav-1.0.9.tar.gz https://www.clamav.net/downloads/production/clamav-1.0.9.tar.gz && \
-    tar xzf ~/clamav-1.0.9.tar.gz && \
-    cd clamav-1.0.9 && mkdir build && cd build && cmake .. \
-    -D CMAKE_INSTALL_PREFIX=/usr \
-    -D CMAKE_INSTALL_LIBDIR=lib \
-    -D APP_CONFIG_DIRECTORY=/etc/clamav \
-    -D DATABASE_DIRECTORY=/usr/lib/clamav  \
-    -D ENABLE_EXTERNAL_MSPACK=OFF \
-    -D ENABLE_CLAMONACC=OFF \
-    -D ENABLE_JSON_SHARED=OFF \
-    -D JSONC_LIBRARY="/usr/lib/libjson-c.so" && \
-    cmake --build . --parallel && cmake --build . --target install && \
-    rm -f ~/clamav-1.0.9.tar.gz && \
-    rm -rf ~/clamav-1.0.9 && \
-    rustup self uninstall -y && \
-    rm -rf /root/.cargo /root/.rustup
-
-# Update ClamAV virus database
-RUN mkdir /usr/lib/clamav && chmod -R 777 /usr/lib/clamav \
-    && chown -R clamav:clamav /usr/lib/clamav/ \
-    && freshclam \
-    && chmod -R 775 /usr/lib/clamav
+RUN mkdir -p /opt/clamav/bin /opt/clamav/lib && \
+    cp /usr/bin/clamdscan /opt/clamav/bin/ && \
+    ldd /usr/bin/clamdscan | awk '$3 ~ /^\/usr\/lib\// {print $3}' | xargs -I{} cp -L {} /opt/clamav/lib/
 
 ###############################################################################
-# Stage 1b: Builder – install gems, precompile assets, install FITS & pip deps
+# Stage 1: Builder – install gems, precompile assets, install FITS & pip deps
 ###############################################################################
 FROM ruby:$RUBY_VERSION-alpine$ALPINE_VERSION AS builder
 
@@ -180,18 +151,6 @@ COPY --link --from=builder /usr/local/bundle /usr/local/bundle
 # Copy application code from builder
 COPY --link --from=builder /data /data
 
-RUN addgroup -S clamav && adduser -S -G clamav clamav
-# Copy ClamAV binaries and libraries from clamav-builder
-COPY --link --from=clamav-builder /usr/bin/clamscan /usr/bin/clamscan
-COPY --link --from=clamav-builder /usr/bin/clamdscan /usr/bin/clamdscan
-COPY --link --from=clamav-builder /usr/bin/freshclam /usr/bin/freshclam
-COPY --link --from=clamav-builder /usr/sbin/clamd /usr/sbin/clamd
-COPY --link --from=clamav-builder /usr/lib/libclam* /usr/lib/
-COPY --link --from=clamav-builder /usr/lib/libfreshclam* /usr/lib/
-COPY --link --from=clamav-builder /etc/clamav /etc/clamav
-COPY --link --from=clamav-builder /usr/lib/clamav /usr/lib/clamav
-COPY --link --from=clamav-builder /var/log/clamav /var/log/clamav
-
 # Copy FITS
 COPY --link --from=builder /opt/fits /opt/fits
 
@@ -207,5 +166,16 @@ CMD ["bundle", "exec", "puma", "-C", "config/puma/production.rb"]
 
 
 FROM hyrax-base AS hyrax-worker
+
+# Only the worker scans uploads (IngestJob on Sidekiq), so only it gets the clamdscan client;
+# clamd runs in a sidecar container from the official clamav/clamav image and is reached
+# through the shared /run/clamav socket
+COPY --link --from=clamav /opt/clamav /opt/clamav
+RUN mkdir -p /etc/clamav /run/clamav && \
+    printf 'LocalSocket /run/clamav/clamd.sock\n' > /etc/clamav/clamd.conf && \
+    printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/clamav/lib exec /opt/clamav/bin/clamdscan "$@"\n' > /usr/local/bin/clamdscan && \
+    chmod 755 /usr/local/bin/clamdscan && \
+    ! LD_LIBRARY_PATH=/opt/clamav/lib ldd /opt/clamav/bin/clamdscan 2>&1 | grep -qE 'not found|Error relocating' && \
+    clamdscan --help > /dev/null
 
 CMD ["bundle", "exec", "sidekiq"]
