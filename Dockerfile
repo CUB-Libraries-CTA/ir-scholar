@@ -177,7 +177,14 @@ COPY --link --from=builder /usr/local/bundle /usr/local/bundle
 # directories the app writes to (tmp/ for pids, uploads and derivatives, and log/).
 COPY --link --from=builder /data /data
 RUN mkdir -p /data/tmp/pids /data/log && \
-    chown -R 1000:1000 /data/tmp /data/log
+    chown -R 1000:1000 /data/tmp /data/log && \
+    install -d -m 0700 -o 1000 -g 1000 /var/tmp/scholar
+
+# A private temp directory for Ruby (Dir.tmpdir) and other TMPDIR-aware tools. Ruby rejects a
+# world-writable /tmp without the sticky bit, such as a Kubernetes emptyDir mounted there, and
+# its fallback (the working directory, /data) isn't writable by scholar, so without this the
+# app can't boot ("could not find a temporary directory").
+ENV TMPDIR=/var/tmp/scholar
 
 # Copy FITS
 COPY --link --from=builder /opt/fits /opt/fits
