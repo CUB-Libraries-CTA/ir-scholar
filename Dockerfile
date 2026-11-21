@@ -157,8 +157,7 @@ ARG RUNTIME_APK_PACKAGES="bash curl openjdk17-jre-headless yaml libreoffice imag
   tzdata"
 
 # Mountain Time so log timestamps match local time; then remove apk so packages can't be
-# installed in the running container. The app runs as the unprivileged user scholar, with
-# fixed numeric IDs so Kubernetes can check runAsNonRoot and set fsGroup.
+# installed in the running container
 RUN apk update && \
     apk --no-cache upgrade && \
     apk --update --no-cache add \
@@ -166,25 +165,13 @@ RUN apk update && \
     $RUNTIME_APK_PACKAGES && \
     cp /usr/share/zoneinfo/America/Denver /etc/localtime && \
     rm -f /sbin/apk && \
-    rm -rf /etc/apk /lib/apk /usr/share/apk /var/lib/apk /usr/mysql-test && \
-    addgroup -S -g 1000 scholar && \
-    adduser -S -D -u 1000 -G scholar -h /home/scholar -s /sbin/nologin scholar
+    rm -rf /etc/apk /lib/apk /usr/share/apk /var/lib/apk /usr/mysql-test
 
 # Copy Ruby gems from builder (--link for better BuildKit layer caching)
 COPY --link --from=builder /usr/local/bundle /usr/local/bundle
 
-# Copy application code from builder. It stays owned by root; scholar owns only the
-# directories the app writes to (tmp/ for pids, uploads and derivatives, and log/).
+# Copy application code from builder
 COPY --link --from=builder /data /data
-RUN mkdir -p /data/tmp/pids /data/log && \
-    chown -R 1000:1000 /data/tmp /data/log && \
-    install -d -m 0700 -o 1000 -g 1000 /var/tmp/scholar
-
-# A private temp directory for Ruby (Dir.tmpdir) and other TMPDIR-aware tools. Ruby rejects a
-# world-writable /tmp without the sticky bit, such as a Kubernetes emptyDir mounted there, and
-# its fallback (the working directory, /data) isn't writable by scholar, so without this the
-# app can't boot ("could not find a temporary directory").
-ENV TMPDIR=/var/tmp/scholar
 
 # Copy FITS
 COPY --link --from=builder /opt/fits /opt/fits
@@ -196,11 +183,9 @@ WORKDIR /data
 EXPOSE 3000/tcp
 
 ###############################################################################
-# Stage 3: Final images – web (Puma) and worker (Sidekiq), both running as scholar
+# Stage 3: Final images – web (Puma) and worker (Sidekiq)
 ###############################################################################
 FROM hyrax-base AS hyrax-web
-
-USER 1000:1000
 
 CMD ["bundle", "exec", "puma", "-C", "config/puma/production.rb"]
 
@@ -219,7 +204,5 @@ RUN mkdir -p /etc/clamav /run/clamav && \
     chmod 755 /usr/local/bin/clamdscan && \
     ! LD_LIBRARY_PATH=/opt/clamav/lib ldd /opt/clamav/bin/clamdscan 2>&1 | grep -qE 'not found|Error relocating' && \
     clamdscan --help > /dev/null
-
-USER 1000:1000
 
 CMD ["bundle", "exec", "sidekiq"]
