@@ -45,10 +45,38 @@ spec:
 Don't put `runAsNonRoot` at the pod level on the worker: it would also apply to the clamav
 sidecar, whose official image starts as root and drops to its own `clamav` user.
 
-Volumes that already hold files written by the old root-run images (uploads, derivatives
-and anything else mounted under `/data/tmp`) need their ownership changed once, e.g.
-`chown -R 1000:1000` from a one-off pod. `fsGroup` changes group ownership on most volume
-types when they're mounted, but not on NFS-based volumes such as EFS; those need the chown.
+Volumes that already hold files written by the old root-run images (uploads, the
+CarrierWave cache in `tmp/cache`, derivatives and anything else mounted under `/data/tmp`)
+need their ownership changed, or uploads fail with `Errno::EACCES (Permission denied @
+dir_s_mkdir - /data/tmp/...)`. `fsGroup` changes group ownership on most volume types when
+they're mounted, but not on NFS-based volumes such as EFS. Either run this once from a
+one-off pod that runs as root and mounts the same volumes:
+
+```sh
+find /data/tmp \( ! -user 1000 -o ! -group 1000 \) -exec chown 1000:1000 {} +
+```
+
+or let an init container do it on every pod start. It skips files that already belong to
+UID and GID 1000, so after the first start it only touches what's new. It uses the app's own image,
+so no other image needs pulling, and runs as root only for this step:
+
+```yaml
+spec:
+  template:
+    spec:
+      initContainers:
+        # On the worker, list this before the clamav sidecar so it runs first
+        - name: fix-volume-ownership
+          image: <the same image as the web or worker container>
+          command: ["sh", "-c", "find /data/tmp \\( ! -user 1000 -o ! -group 1000 \\) -exec chown 1000:1000 {} +"]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          volumeMounts:
+            # Repeat the app container's volumeMounts that are under /data/tmp, e.g.
+            - name: uploads
+              mountPath: /data/tmp/uploads
+```
 
 
 ## Google Analytics key
