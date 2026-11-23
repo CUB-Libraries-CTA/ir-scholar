@@ -21,6 +21,107 @@ storage class set aws-
         $ solr create -c hydra-prod -n scholar -shards 2
 
 
+## Google Analytics key
+
+The Google service account key (`*.p12`) is kept out of the images by `.dockerignore`.
+`config/analytics.yml` only sets the GA4 tracking ID today, so nothing reads the key. If
+Hyrax analytics reporting is turned back on (`privkey_path`, `privkey_secret`,
+`client_email` and the other GA4 keys in `config/analytics.yml`), mount the key from a
+Kubernetes Secret and point `privkey_path` at the mounted file instead of baking it in:
+
+```yaml
+      volumes:
+        - name: analytics-key
+          secret:
+            secretName: scholar-analytics-key
+      containers:
+        - name: web # and the worker, if it reports analytics
+          volumeMounts:
+            - name: analytics-key
+              mountPath: /etc/scholar/analytics
+              readOnly: true
+```
+
+
+## ClamAV sidecar (worker)
+
+Uploads are virus-scanned in the worker (`IngestJob` on Sidekiq) through
+`Scholar::ClambyVirusScanner`, which runs `clamdscan --fdpass` against a `clamd`
+sidecar. Add this to the **worker** Deployment only; the web image has no ClamAV
+client and never scans.
+
+The official image creates its socket at `/tmp/clamd.sock`, so one `emptyDir` is
+mounted at `/tmp` in the sidecar and at `/run/clamav` in the worker, where the
+worker image's `/etc/clamav/clamd.conf` expects `/run/clamav/clamd.sock`.
+
+```yaml
+spec:
+  template:
+    spec:
+      volumes:
+        - name: clamav-socket
+          emptyDir: {}
+      initContainers:
+        # Native sidecar (Kubernetes >= 1.29): starts before the worker, and the worker
+        # waits for its startupProbe. Keep the tag in sync with CLAMAV_VERSION in the Dockerfile.
+        - name: clamav
+          image: clamav/clamav:1.4
+          restartPolicy: Always
+          env:
+            # Scan files (and archive contents) up to 1GB; larger ones are reported clean
+            # without being scanned. clamd's defaults are 100M / 400M.
+            - name: CLAMD_CONF_MaxFileSize
+              value: 1024M
+            - name: CLAMD_CONF_MaxScanSize
+              value: 1024M
+          volumeMounts:
+            - name: clamav-socket
+              mountPath: /tmp
+          resources:
+            requests:
+              memory: 1536Mi
+            limits:
+              memory: 3Gi # a signature reload briefly holds two databases in memory
+          startupProbe:
+            exec:
+              command: ["clamdcheck.sh"]
+            periodSeconds: 10
+            failureThreshold: 60 # first start may download the DB, then load it
+          readinessProbe:
+            exec:
+              command: ["clamdcheck.sh"]
+            periodSeconds: 30
+          # Restarts a hung clamd; scans have no timeout, so a hang would otherwise
+          # block ingest jobs. Generous because a busy clamd can be slow to answer PING.
+          livenessProbe:
+            exec:
+              command: ["clamdcheck.sh"]
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 5
+      containers:
+        - name: worker # the existing worker container; add only this mount
+          volumeMounts:
+            - name: clamav-socket
+              mountPath: /run/clamav
+```
+
+* On clusters older than 1.29, move the `clamav` entry from `initContainers` to
+  `containers` and drop `restartPolicy`. Sidekiq may then start before `clamd` is
+  ready; ingest jobs in that window raise `Clamby::ClamscanClientError` and retry.
+* `freshclam` in the sidecar updates signatures daily and needs outbound HTTPS to
+  `database.clamav.net`.
+* The official config also has `clamd` listen on TCP 3310 on the pod IP (its
+  `clamdcheck.sh` probe uses it). Nothing in the app does; restrict it with a
+  NetworkPolicy if the namespace isn't already locked down.
+* Files larger than `MaxFileSize` (set to 1024M above) are not scanned at all and
+  are reported clean. Scanning also stops once `MaxScanSize` (1024M) of data has
+  been read, e.g. from an archive's contents, and the file is reported clean.
+* clamd unpacks archives into its temp directory, which is the shared `/tmp`
+  `emptyDir`, so scanning a 1GB archive can use about that much of the pod's
+  ephemeral storage.
+
+
 ## Scholar Administration set 
 
 

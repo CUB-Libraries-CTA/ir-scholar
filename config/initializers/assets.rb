@@ -12,3 +12,6 @@ Rails.application.config.assets.paths << Rails.root.join('node_modules')
 # application.js, application.css, and all non-JS/CSS in the app/assets
 # folder are already added.
 # Rails.application.config.assets.precompile += %w( admin.js admin.css )
+# CU Boulder branding, linked on its own by layouts/application (and also bundled into
+# application.css by its require_tree)
+Rails.application.config.assets.precompile += %w( cu_boulder_font.css cu_boulder_branding.css )

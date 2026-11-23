@@ -15,9 +15,7 @@
  *= require dataTables/bootstrap/3/jquery.dataTables.bootstrap
  *= require_self
  */
-/** Global styles */
-@import "cu_boulder_font.css";
-@import "cu_boulder_branding.css";
+/** Global styles: cu_boulder_font.css and cu_boulder_branding.css are included by require_tree above */
 
 /* Add the Core Trust Seal to CU Branded Footer */
 .site-footer .container-fluid {

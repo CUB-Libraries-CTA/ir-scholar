@@ -310,6 +310,10 @@ Hyrax.config do |config|
   # WARNING: KEEP THIS SECRET. DO NOT STORE IN REPOSITORY
   config.recaptcha_secret_key = ENV.fetch("RECAPTCHA_SECRET_KEY", "xxxx")
   config.collection_model = '::Collection'
+
+  # Scan uploads through the clamd sidecar on the worker; development and test keep
+  # Hyrax's null scanner
+  config.virus_scanner = Scholar::ClambyVirusScanner if Rails.env.production?
 end
 
 Date::DATE_FORMATS[:standard] = "%Y-%m-%d"

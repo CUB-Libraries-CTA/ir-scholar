@@ -7,7 +7,6 @@
 # Ignore bundler config.
 /.bundle
 /zizia
-/config/uv
 
 __pycache__
 .pyc
